@@ -47,7 +47,7 @@ function(x, y, data, family = "binomial",
     
   # Begin ensemble code
   if (is.numeric(seed)) set.seed(seed)  #If seed is specified, set seed prior to next step
-  folds <- sample(rep(seq(V), N/V))  # Cross-validation folds (stratified folds not yet supported)
+  folds <- sample(rep(seq(V), ceiling(N/V)))[1:N]  # Cross-validation folds (stratified folds not yet supported)
   data$fold_id <- folds  # Add a fold_id column for each observation so we can subset by row later
   
   # Create the Z matrix of cross-validated predictions
@@ -224,8 +224,6 @@ predict.h2o.ensemble <- function(object, newdata) {
     }
   }
   names(basepreddf) <- names(object$basefits)
-  basepreddf[basepreddf < object$ylim[1]] <- object$ylim[1]  #Enforce bounds
-  basepreddf[basepreddf > object$ylim[2]] <- object$ylim[2]
   basepred <- as.h2o(localH2O, basepreddf, key="basepred")
   
   if (grepl("H2O", class(object$metafit))) {
@@ -235,9 +233,6 @@ predict.h2o.ensemble <- function(object, newdata) {
     # SuperLearner wrapper function metalearner
     pred <- predict(object=object$metafit$fit, newdata=basepred)
   }
-  # TO DO: Maybe restrict bounds here, but change code to work for pred as H2OParsedData obj
-  #pred[pred < object$ylim[1]] <- object$ylim[1]  #Enforce bounds
-  #pred[pred > object$ylim[2]] <- object$ylim[2]
   out <- list(pred = pred, basepred = basepred)
   return(out)
 }

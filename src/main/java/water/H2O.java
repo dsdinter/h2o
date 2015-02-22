@@ -44,7 +44,9 @@ public final class H2O {
   public static boolean SINGLE_PRECISION = false;
 
   // Max. number of factor levels ber column (before flipping all to NAs)
-  public static int DATA_MAX_FACTOR_LEVELS = 65000;
+  public static int DATA_MAX_FACTOR_LEVELS = 1000000;
+
+  public static int LOG_CHK = 22; // Chunks are 1<<22, or 4Meg
 
   // The multicast discovery port
   static MulticastSocket  CLOUD_MULTICAST_SOCKET;
@@ -713,11 +715,14 @@ public final class H2O {
     public String version = null;
     public String single_precision = null;
     public int data_max_factor_levels;
+    public String many_cols = null;
+    public int chunk_bytes;
     public String beta = null;
     public String mem_watchdog = null; // For developer debugging
     public boolean md5skip = false;
     public boolean ga_opt_out = false;
     public String ga_hadoop_ver = null;
+    public boolean no_ice = false;
   }
 
   public static void printHelp() {
@@ -763,6 +768,13 @@ public final class H2O {
     "          Reduce the max. (storage) precision for floating point numbers\n" +
     "          from double to single precision to save memory of numerical data.\n" +
     "          (The default is double precision.)\n" +
+    "\n" +
+    "    -many_cols\n" +
+    "          Enables improved handling of high-dimensional datasets.  Same as -chunk_bytes 24.\n" +
+    "\n" +
+    "    -chunk_bytes <integer>\n" +
+    "          Experimental option. Not in combination with -many_cols. The log (base 2) of chunk size in bytes.\n" +
+    "          (The default is " + LOG_CHK + ", which leads to a chunk size of " + PrettyPrint.bytes(1<<LOG_CHK) + ".)\n" +
     "\n" +
     "    -data_max_factor_levels <integer>\n" +
     "          The maximum number of factor levels for categorical columns.\n" +
@@ -916,6 +928,24 @@ public final class H2O {
       DATA_MAX_FACTOR_LEVELS = OPT_ARGS.data_max_factor_levels;
       Log.info("Max. number of factor levels per column: " + DATA_MAX_FACTOR_LEVELS);
     }
+
+    if (OPT_ARGS.chunk_bytes != 0 || OPT_ARGS.many_cols != null) {
+      if (OPT_ARGS.many_cols != null) {
+        LOG_CHK = 24;
+        if (OPT_ARGS.chunk_bytes > 0) {
+          Log.warn("-chunk_bytes is ignored since -many_cols was set.");
+        }
+      } else if (OPT_ARGS.chunk_bytes > 0) {
+        LOG_CHK = OPT_ARGS.chunk_bytes;
+        if (OPT_ARGS.chunk_bytes < 22) {
+          Log.warn("-chunk_bytes < 22 is not officially supported. Use at your own risk.");
+        }
+        if (OPT_ARGS.chunk_bytes > 24) {
+          Log.warn("-chunk_bytes > 24 is not officially supported. Use at your own risk.");
+        }
+      }
+    }
+    Log.info("Chunk size: " + PrettyPrint.bytes(1<<LOG_CHK));
 
     // Get ice path before loading Log or Persist class
     String ice = DEFAULT_ICE_ROOT();
@@ -1355,13 +1385,22 @@ public final class H2O {
   }
 
   static void initializePersistence() {
+    Log.POST(3001);
     HdfsLoader.loadJars();
+    Log.POST(3002);
     if( OPT_ARGS.aws_credentials != null ) {
       try {
+        Log.POST(3003);
         PersistS3.getClient();
-      } catch( IllegalArgumentException e ) { Log.err(e); }
+        Log.POST(3004);
+      } catch( IllegalArgumentException e ) {
+        Log.POST(3005);
+        Log.err(e);
+      }
     }
+    Log.POST(3006);
     Persist.initialize();
+    Log.POST(3007);
   }
 
   static void initializeLicenseManager() {
@@ -1569,7 +1608,7 @@ public final class H2O {
     }
 
     static boolean lazyPersist(){ // free disk > our DRAM?
-      return H2O.SELF._heartbeat.get_free_disk() > MemoryManager.MEM_MAX;
+      return !H2O.OPT_ARGS.no_ice && H2O.SELF._heartbeat.get_free_disk() > MemoryManager.MEM_MAX;
     }
     static boolean isDiskFull(){ // free disk space < 5K?
       long space = Persist.getIce().getUsableSpace();

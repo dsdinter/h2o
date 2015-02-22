@@ -48,6 +48,15 @@ public class NewChunk extends Chunk {
 
   public NewChunk( Vec vec, int cidx ) { _vec = vec; _cidx = cidx; }
 
+  public NewChunk( Vec vec, int cidx, boolean sparse ) {
+    _vec = vec; _cidx = cidx;
+    if(sparse) {
+      _ls = new long[128];
+      _xs = new int[128];
+      _id = new int[128];
+    }
+  }
+
   public NewChunk(double [] ds) {
     _cidx = -1;
     _vec = null;
@@ -327,7 +336,8 @@ public class NewChunk extends Chunk {
 
   // Slow-path append data
   private void append2slowd() {
-    if( _sparseLen > Vec.CHUNK_SZ )
+    final int CHUNK_SZ = 1 << H2O.LOG_CHK;
+    if( _sparseLen > CHUNK_SZ )
       throw new ArrayIndexOutOfBoundsException(_sparseLen);
     assert _ls==null;
     if(_ds != null && _ds.length > 0){
@@ -346,7 +356,8 @@ public class NewChunk extends Chunk {
   }
   // Slow-path append data
   private void append2slowUUID() {
-    if( _sparseLen > Vec.CHUNK_SZ )
+    final int CHUNK_SZ = 1 << H2O.LOG_CHK;
+    if( _sparseLen > CHUNK_SZ )
       throw new ArrayIndexOutOfBoundsException(_sparseLen);
     if( _ds==null && _ls!=null ) { // This can happen for columns with all NAs and then a UUID
       _xs=null;
@@ -365,7 +376,8 @@ public class NewChunk extends Chunk {
   }
   // Slow-path append data
   private void append2slow( ) {
-    if( _sparseLen > Vec.CHUNK_SZ )
+    final int CHUNK_SZ = 1 << H2O.LOG_CHK;
+    if( _sparseLen > CHUNK_SZ )
       throw new ArrayIndexOutOfBoundsException(_sparseLen);
     assert _ds==null;
     if(_ls != null && _ls.length > 0){

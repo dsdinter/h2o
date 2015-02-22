@@ -105,7 +105,7 @@ public class RequestServer extends NanoHTTPD {
     // Register Inspect2 just for viewing frames
     registerRequest(new Inspect2());
     registerRequest(new MMStats());
-
+    registerRequest(new GLMMakeModel());
     // FVec models
     Request.addToNavbar(registerRequest(new DeepLearning()),"Deep Learning",                   "Model");
     Request.addToNavbar(registerRequest(new GLM2()),        "Generalized Linear Model",        "Model");
@@ -238,6 +238,9 @@ public class RequestServer extends NanoHTTPD {
     registerRequest(new GLMProgress());
     registerRequest(new hex.glm.GLMGridProgress());
     registerRequest(new water.api.Levels2());    // Temporary hack to get factor levels efficiently
+    registerRequest(new SetTimezone());
+    registerRequest(new GetTimezone());
+    registerRequest(new ListTimezones());
     // Typeahead
     registerRequest(new TypeaheadModelKeyRequest());
     registerRequest(new TypeaheadPCAModelKeyRequest());

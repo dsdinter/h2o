@@ -11,6 +11,7 @@ import java.io.InputStream;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.IllegalFormatException;
+import java.util.Random;
 
 /**
  * A collection of named Vecs.  Essentially an R-like data-frame.  Multiple
@@ -46,13 +47,8 @@ public class Frame extends Lockable<Frame> {
     _names=names;
     _vecs=vecs;
     _keys = new Key[vecs.length];
-    Futures fs = new Futures();
-    for( int i=0; i<vecs.length; i++ ) {
-      Key k = _keys[i] = vecs[i]._key;
-      if( DKV.get(k)==null )    // If not already in KV, put it there
-        DKV.put(k,vecs[i], fs);
-    }
-    fs.blockForPending();
+    for( int i=0; i<vecs.length; i++ )
+      _keys[i] = vecs[i]._key;
     assert checkCompatible();
   }
 
@@ -236,6 +232,7 @@ public class Frame extends Lockable<Frame> {
         return i;
     return -1;
   }
+
 
   // Return Frame 'f' if 'f' is compatible with 'this'.
   // Return a new Frame compatible with 'this' and a copy of 'f's data otherwise.
@@ -540,9 +537,11 @@ public class Frame extends Lockable<Frame> {
     // Also check each chunk has same rows
     for( int i=0; i<nchunks; i++ ) {
       long es = v0.chunk2StartElem(i);
-      for( Vec vec : vecs() )
-        if( !(vec instanceof AppendableVec) && vec.chunk2StartElem(i) != es )
-          throw new IllegalArgumentException("Vector chunks different numbers of rows, "+es+" and "+vec.chunk2StartElem(i));
+      for(int j = 1; j < numCols(); ++j) {
+        Vec vec = vec(j);
+        if (!(vec instanceof AppendableVec) && vec.chunk2StartElem(i) != es)
+          throw new IllegalArgumentException("Vector chunks have different numbers of rows, " + es + " and " + vec.chunk2StartElem(i) + " at vec " + j + " and chunk " + i);
+      }
     }
     // For larger Frames, verify that the layout is compatible - else we'll be
     // endlessly cache-missing the data around the cluster, pulling copies
@@ -1073,6 +1072,34 @@ public class Frame extends Lockable<Frame> {
     }
   }
 
+
+  public static Frame[] runifSplit(Frame f, float threshold, long seed) {
+    if (seed == -1) seed = new Random().nextLong();
+    Vec rv = new Vec(f.anyVec().group().addVecs(1)[0],f.anyVec()._espc);
+    Futures fs = new Futures();
+    DKV.put(rv._key,rv, fs);
+    for(int i = 0; i < rv._espc.length-1; ++i)
+      DKV.put(rv.chunkKey(i),new C0DChunk(0,(int)(rv._espc[i+1]-rv._espc[i])),fs);
+    fs.blockForPending();
+    final long zeed = seed;
+    new MRTask2() {
+      @Override public void map(Chunk c){
+        Random rng = new Random(zeed*c.cidx());
+        for(int i = 0; i < c._len; ++i)
+          c.set0(i, (float)rng.nextDouble());
+      }
+    }.doAll(rv);
+    Vec[] vecs = new Vec[f.numCols()+1];
+    System.arraycopy(f.vecs(), 0, vecs,0, f.numCols());
+    vecs[f.numCols()] = rv;
+    Frame doAllFr = new Frame(null, vecs);
+    // it would be great if there was a map call for NewChunk[][] multi frame output
+    Frame left = new DeepSelectThresh(threshold,  true).doAll(f.numCols(),doAllFr).outputFrame(Key.make(), f.names(), f.domains());
+    Frame rite = new DeepSelectThresh(threshold, false).doAll(f.numCols(),doAllFr).outputFrame(Key.make(), f.names(), f.domains());
+    UKV.remove(rv._key);
+    return new Frame[]{left,rite};
+  }
+
   private static class DeepSelect extends MRTask2<DeepSelect> {
     @Override public void map( Chunk chks[], NewChunk nchks[] ) {
       Chunk pred = chks[chks.length-1];
@@ -1083,6 +1110,31 @@ public class Frame extends Lockable<Frame> {
             if( chk._vec.isUUID() ) nchks[j].addUUID(chk,i);
             else nchks[j].addNum(chk.at0(i));
           }
+        }
+      }
+    }
+  }
+
+  private static class DeepSelectThresh extends MRTask2<DeepSelectThresh> {
+    private final float _threshold;
+    private final boolean _left;
+    DeepSelectThresh(float threshold, boolean left) { _threshold = threshold; _left = left; }
+
+    private void addRow(Chunk[] cs, NewChunk[] ncs, int i) {
+      for (int j = 0; j < cs.length -1; ++j) {
+        Chunk c = cs[j];
+        if (c._vec.isUUID()) ncs[j].addUUID(c,i);
+        else ncs[j].addNum(c.at0(i)); // NewChunk will compress later ... not set0s
+      }
+    }
+
+    @Override public void map(Chunk cs[], NewChunk ncs[]) {
+      Chunk rv = cs[cs.length-1];
+      for (int i = 0; i < rv._len; ++i) {
+        if (_left) {
+          if (rv.at0(i) <= _threshold) addRow(cs, ncs, i);
+        } else {
+          if (rv.at0(i) > _threshold)  addRow(cs, ncs, i);
         }
       }
     }

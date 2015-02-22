@@ -12,6 +12,7 @@ def define_create_frame_params(SEED):
         'value': [None, 0, 1234567890, 1e6, -1e6], # Constant value (for randomize=false)
         'real_range': [None, 0, 1234567890, 1e6, -1e6], # -range to range
         'categorical_fraction': [None, 0.1, 1.0], # Fraction of integer columns (for randomize=true)
+        'binary_fraction': [0], # Fraction of binary columns (for randomize=true)
         'factors': [None, 2, 10], # Factor levels for categorical variables
         'integer_fraction': [None, 0.1, 1.0], # Fraction of integer columns (for randomize=true)
         'integer_range': [None, 0, 1, 1234567890], # -range to range
@@ -58,6 +59,7 @@ class Basic(unittest.TestCase):
                 'cols': 10
             }
             h2o_util.pickRandParams(cfParamDict, params)
+            b = params.get('binary_fraction', None)
             i = params.get('integer_fraction', None)
             c = params.get('categorical_fraction', None)
             r = params.get('randomize', None)
@@ -66,21 +68,25 @@ class Basic(unittest.TestCase):
             # h2o does some strict checking on the combinations of these things
             # fractions have to add up to <= 1 and only be used if randomize
             # h2o default randomize=1?
-            if r:
-                if not i:
-                    i = 0
-                if not c:
-                    c = 0
-                if (i and c) and (i + c) >= 1.0:
-                    c = 1.0 - i
-                params['integer_fraction'] = i
-                params['categorical_fraction'] = c
-                params['value'] = None
+            if not b:
+                b = 0
+            if not i:
+                i = 0
+            if not c:
+                c = 0
 
-            else:
-                params['randomize'] = 0
-                params['integer_fraction'] = 0
-                params['categorical_fraction'] = 0
+            # force a good combo, by decreasing t2o a little at a time
+            while (i + b + c) > 1.0:
+                print "Trying to find a good mix of fractional", b, i, c
+                b = max(0, b - 0.13)
+                i = max(0, i - 0.17)
+                # what's left
+                c = 1.0 - (i + b)
+
+            params['binary_fraction'] = b
+            params['integer_fraction'] = i
+            params['categorical_fraction'] = c
+            params['value'] = None
 
 
             kwargs = params.copy()

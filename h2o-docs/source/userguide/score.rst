@@ -5,13 +5,14 @@ Score
 .. toctree::
    :maxdepth: 1
 
-   scoreMulitModel
+   scoreMultiModel
    scorePOJO
    scorePCAscore
    scoreauc
    scoreconfusionmatrix
    scorehitratio
    scorepredict
+   scoregainslift
    
 """"""""" 
 

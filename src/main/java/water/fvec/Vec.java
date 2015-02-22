@@ -7,6 +7,7 @@ import water.util.Utils;
 
 import java.util.Arrays;
 import java.util.UUID;
+import java.util.concurrent.Future;
 
 import static water.util.Utils.seq;
 
@@ -44,11 +45,6 @@ import static water.util.Utils.seq;
  * @author Cliff Click
  */
 public class Vec extends Iced {
-  /** Log-2 of Chunk size. */
-  public static final int LOG_CHK = 22; // Chunks are 1<<22, or 4Meg
-  /** Chunk size.  Bigger increases batch sizes, lowers overhead costs, lower
-   * increases fine-grained parallelism. */
-  public static final int CHUNK_SZ = 1 << LOG_CHK;
 
   /** Key mapping a Value which holds this Vec.  */
   final public Key _key;        // Top-level key
@@ -76,9 +72,6 @@ public class Vec extends Iced {
   private long _last_write_timestamp = System.currentTimeMillis();
   private long _checksum_timestamp = -1;
   private long _checksum = 0;
-
-  /** Maximal size of enum domain */
-  public static final int MAX_ENUM_SIZE = 10000;
 
   /** Main default constructor; requires the caller understand Chunk layout
    *  already, along with count of missing elements.  */
@@ -223,10 +216,11 @@ public class Vec extends Iced {
     }.doAll(makeConSeq(0, len)).vecs(0);
   }
   public static Vec makeConSeq(double x, long len) {
-    int chunks = (int)Math.ceil((double)len / Vec.CHUNK_SZ);
+    final int CHUNK_SZ = 1 << H2O.LOG_CHK;
+    int chunks = (int)Math.ceil((double)len / CHUNK_SZ);
     long[] espc = new long[chunks+1];
     for (int i = 1; i<=chunks; ++i)
-      espc[i] = Math.min(espc[i-1] + Vec.CHUNK_SZ, len);
+      espc[i] = Math.min(espc[i-1] + CHUNK_SZ, len);
     return new Vec(VectorGroup.VG_LEN1.addVec(), espc).makeCon(x);
   }
 
@@ -367,7 +361,8 @@ public class Vec extends Iced {
     if( !isInt() ) throw new IllegalArgumentException("Enum conversion only works on integer columns");
     long[] domain;
     String[] sdomain = Utils.toString(domain = new CollectDomain(this).doAll(this).domain());
-    if( domain.length > MAX_ENUM_SIZE ) throw new IllegalArgumentException("Column domain is too large to be represented as an enum: " + domain.length + " > " + MAX_ENUM_SIZE);
+    if( domain.length > H2O.DATA_MAX_FACTOR_LEVELS )
+      throw new IllegalArgumentException("Column domain is too large to be represented as an enum: " + domain.length + " > " + H2O.DATA_MAX_FACTOR_LEVELS + ". Launch H2O with -data_max_factor_levels <N>.");
     return this.makeSimpleTransf(domain, sdomain);
   }
 
@@ -971,6 +966,20 @@ public class Vec extends Iced {
         return new VectorGroup(_key, n+_n);
       }
     }
+
+    /**
+     * Task to atomically add vectors into existing group.
+     * @author tomasnykodym
+     */
+    private static class ReturnKeysTsk extends TAtomic<VectorGroup>{
+      final int _newCnt;          // INPUT: Keys to allocate; OUTPUT: start of run of keys
+      final int _oldCnt;
+      private ReturnKeysTsk(Key key, int oldCnt, int newCnt){_newCnt = newCnt; _oldCnt = oldCnt;}
+      @Override public VectorGroup atomic(VectorGroup old) {
+        return (old._len == _oldCnt)? new VectorGroup(_key, _newCnt):old;
+      }
+    }
+    public Future tryReturnKeys(final int oldCnt, int newCnt) { return new ReturnKeysTsk(_key,oldCnt,newCnt).fork(_key);}
     // reserve range of keys and return index of first new available key
     public int reserveKeys(final int n){
       AddVecs2GroupTsk tsk = new AddVecs2GroupTsk(_key, n);

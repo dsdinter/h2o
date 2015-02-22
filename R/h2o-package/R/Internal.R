@@ -133,6 +133,9 @@ h2o.setLogPath <- function(path, type) {
 .h2o.__PAGE_INSPECTOR = "2/Inspector.json"
 .h2o.__PAGE_ANOMALY = "2/Anomaly.json"
 .h2o.__PAGE_DEEPFEATURES = "2/DeepFeatures.json"
+.h2o.__PAGE_SETTIMEZONE = "2/SetTimezone.json"
+.h2o.__PAGE_GETTIMEZONE = "2/GetTimezone.json"
+.h2o.__PAGE_LISTTIMEZONES = "2/ListTimezones.json"
 
 .h2o.__PAGE_CoxPH = "2/CoxPH.json"
 .h2o.__PAGE_CoxPHProgress = "2/CoxPHProgressPage.json"
@@ -175,6 +178,8 @@ h2o.setLogPath <- function(path, type) {
 .h2o.__PAGE_LoadModel = "2/LoadModel.json"
 .h2o.__PAGE_RemoveVec = "2/RemoveVec.json"
 .h2o.__PAGE_Order = "2/Order.json"
+
+.h2o.__GLMMakeModel = "2/GLMMakeModel.json"
 
 # client -- Connection object returned from h2o.init().
 # page   -- URL to access within the H2O server.
@@ -886,6 +891,11 @@ function(h2o, key) {
   .fetchJSON(h2o, key)
 }
 
+.check.exists <- function(h2o, key) {
+  keys <- as.data.frame(h2o.ls(h2o))[,1]
+  key %in% keys
+}
+
 #'
 #' Fetch the model from the key
 h2o.getModel <- function(h2o, key) {
@@ -923,14 +933,17 @@ h2o.getModel <- function(h2o, key) {
   dest_key   <- key #params$destination_key
 
   train_fr   <- new("H2OParsedData", key = "NA")
-  if(!is.null(response$"_dataKey")) train_fr <- h2o.getFrame(h2o, response$"_dataKey")
+  if(!is.null(response$"_dataKey") && .check.exists(h2o, response$"_dataKey")) {
+    train_fr <- h2o.getFrame(h2o, response$"_dataKey") } else {
+      train_fr@h2o <- h2o
+    }
   params$importance <- !is.null(params$varimp)
   if(!is.null(params$family) && model.type == "gbm_model") {
-    params$distribution <- "multinomial"
-    if(params$family == "AUTO") {
-      if(!is.null(json[[model.type]]$validAUC)) params$distribution <- "bernoulli"
+    if(params$classification == "false") {params$distribution <- "gaussian"
+      } else {
+        if(length(params$'_distribution') > 2) params$distribution <- "multinomial" else params$distribution <- "bernoulli"
+      }
     }
-  }
   if(algo == "model") {
     newModel <- new(model_obj, key = dest_key, data = train_fr, model = results_fun(json[[model.type]], train_fr, params))
     return(newModel)

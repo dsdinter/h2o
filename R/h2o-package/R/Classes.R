@@ -49,7 +49,7 @@ setClass("H2OGLMModelList", representation(models="list", best_model="numeric", 
 # setMethod("initialize", "H2OParsedData", function(.Object, h2o = new("H2OClient"), key = "") {
 #   .Object@h2o = h2o
 #   .Object@key = key
-#   .Object@env = new.env()
+#   .Object@env = new.env()ASTSS
 #
 #   assign("h2o", .Object@h2o, envir = .Object@env)
 #   assign("key", .Object@key, envir = .Object@env)
@@ -214,6 +214,19 @@ function(formula, newdata, conf.int = 0.95,
     capture.output(newdata <- as.h2o(formula@data@h2o, newdata, header = TRUE))
   conf.type <- match.arg(conf.type)
 
+  # Code below has calculation performed in R
+  pred <- as.data.frame(h2o.predict(formula, newdata))[[1L]]
+  res <- formula@survfit
+  if (length(pred) == 1L)
+    res$cumhaz <- pred * res$cumhaz
+  else
+    res$cumhaz <- outer(res$cumhaz, pred, FUN = "*")
+  res$std.err <- NULL
+  res$surv <- exp(- res$cumhaz)
+  class(res) <- c("survfit.H2OCoxPHModel", "survfit.cox", "survfit")
+  return(res)
+
+  # Code below assumes calculation in H2O
   pred <- as.matrix(h2o.predict(formula, newdata)[,-1L])
   nms <- colnames(pred)
   dimnames(pred) <- NULL
@@ -270,11 +283,10 @@ setMethod("show", "H2OKMeansModel", function(object) {
     print(object@data@h2o)
     cat("Parsed Data Key:", object@data@key, "\n\n")
     cat("K-Means Model Key:", object@key)
-    
     model = object@model
     cat("\n\nK-means clustering with", length(model$size), "clusters of sizes "); cat(model$size, sep=", ")
     cat("\n\nCluster means:\n"); print(model$centers)
-    cat("\nClustering vector:\n"); print(summary(model$cluster))
+    if (!is.null(model$cluster)) { cat("\nClustering vector:\n"); print(summary(model$cluster)) }
     cat("\nWithin cluster sum of squares by cluster:\n"); print(model$withinss)
 #    cat("(between_SS / total_SS = ", round(100*sum(model$betweenss)/model$totss, 1), "%)\n")
     cat("\nAvailable components:\n\n"); print(names(model))
@@ -290,29 +302,31 @@ setMethod("show", "H2OGLMModel", function(object) {
     if(!is.null(model$normalized_coefficients)) {
         cat("\nNormalized Coefficients:\n"); print(round(model$normalized_coefficients,5))
     }
-    cat("\nDegrees of Freedom:", model$df.null, "Total (i.e. Null); ", model$df.residual, "Residual")
-    cat("\nNull Deviance:    ", round(model$null.deviance,1))
+    if( !(identical(model$df.null, numeric(0))) ) 
+      cat("\nDegrees of Freedom:", model$df.null, "Total (i.e. Null); ", model$df.residual, "Residual")
+    if(is.numeric(model$null.deviance)) cat("\nNull Deviance:    ", round(model$null.deviance,1))
     #Return AIC NaN while calculations for tweedie/gamma not implemented; keep R from throwing error
     if (class(model$aic) != "numeric") {
-      cat("\nResidual Deviance:", round(model$deviance,1), " AIC: NaN")
+      if(is.numeric(model$deviance)) cat("\nResidual Deviance:", round(model$deviance,1), " AIC: NaN")
     } else {
-      cat("\nResidual Deviance:", round(model$deviance,1), " AIC:", round(model$aic,1))
+      if(is.numeric(model$deviance)) cat("\nResidual Deviance:", round(model$deviance,1), " AIC:", round(model$aic,1))
     }
-    cat("\nDeviance Explained:", round(1-model$deviance/model$null.deviance,5), "\n")
+    if(is.numeric(model$null.deviance)) cat("\nDeviance Explained:", round(1-model$deviance/model$null.deviance,5), "\n")
     # cat("\nAvg Training Error Rate:", round(model$train.err,5), "\n")
-    
+
     family <- model$params$family$family
     if(family == "binomial") {
-        cat(" Best Threshold:", round(model$best_threshold,5))
-        cat("\n\nConfusion Matrix:\n"); print(model$confusion)
-    if (!is.null(model$auc)) {
-        if(.hasSlot(object, "valid"))
-          trainOrValidation <- ifelse(is.na(object@valid@key), "train)", "validation)")
-        else trainOrValidation <- "train)"
-        cat("\nAUC = ", model$auc, "(on", trainOrValidation ,"\n")
-      }
+        if(is.numeric(model$best_threshold)) cat(" Best Threshold:", round(model$best_threshold,5))
+        if(is.matrix(model$confusion)) cat("\n\nConfusion Matrix:\n") ; if(is.matrix(model$confusion)) print(model$confusion)
+        if (!is.null(model$auc)) {
+            if(.hasSlot(object, "valid")) {
+              trainOrValidation <- ifelse(is.na(object@valid@key), "train)", "validation)")
+            } else {trainOrValidation <- "train)"
+            if(is.numeric(model$auc)) cat("\nAUC = ", model$auc, "(on", trainOrValidation ,"\n")
+            }
+          }
     }
-
+    
     if(length(object@xval) > 0) {
         cat("\nCross-Validation Models:\n")
         if(family == "binomial") {
@@ -426,7 +440,7 @@ setMethod("show", "H2ODRFModel", function(object) {
     if(is.na(object@valid@key))
       if (!is.null(object@model$params$nfolds) && object@model$params$nfolds >= 2)
         cat("Reported on", paste(object@model$params$nfolds, "-fold cross-validated data", sep = ""), "\n")
-      else cat("Reported on training data.")
+      else cat("Reported on training data.\n")
     else
       cat("Reported on", object@valid@key, "\n")
     print(model$confusion)
@@ -583,6 +597,28 @@ as.Date.H2OParsedData <- function(x, format, ...) {
   res <- .h2o.exec2(res$dest_key, h2o = x@h2o, res$dest_key)
   res@logic <- FALSE
   return(res)
+}
+
+h2o.setTimezone <- function(client, tz) {
+  if(class(client) != "H2OClient") stop("client must be a H2OClient object")
+  if (!is.character(tz)) stop('tz must be a string')
+
+  res = .h2o.__remoteSend(client, .h2o.__PAGE_SETTIMEZONE, tz = tz)
+  res$tz
+}
+
+h2o.getTimezone <- function(client) {
+  if(class(client) != "H2OClient") stop("client must be a H2OClient object")
+
+  res = .h2o.__remoteSend(client, .h2o.__PAGE_GETTIMEZONE)
+  res$tz
+}
+
+h2o.listTimezones <- function(client) {
+  if(class(client) != "H2OClient") stop("client must be a H2OClient object")
+
+  res = .h2o.__remoteSend(client, .h2o.__PAGE_LISTTIMEZONES)
+  cat(res$tzlist)
 }
 
 diff.H2OParsedData <- function(x, lag = 1, differences = 1, ...) {
@@ -1143,12 +1179,11 @@ rbind.H2OParsedData <- function(..., deparse.level = 1) {
   # l_dep <- sapply(substitute(placeholderFunction(...))[-1], deparse)
   if(length(l) == 0) stop('rbind requires an H2O parsed dataset')
 
-  klass <- 'H2OParsedData'
+#  klass <- 'H2OParsedData'
   h2o <- l[[1]]@h2o
-  nrows <- nrow(l[[1]])
-  m <- Map(function(elem){ inherits(elem, klass) & elem@h2o@ip == h2o@ip & elem@h2o@port == h2o@port & nrows == nrow(elem) }, l)
-  compatible <- Reduce(function(l,r) l & r, x=m, init=T)
-  if(!compatible){ stop(paste('rbind: all elements must be of type', klass, 'and in the same H2O instance'))}
+#  m <- Map(function(elem){ inherits(elem, klass) & elem@h2o@ip == h2o@ip & elem@h2o@port == h2o@port & nrows == nrow(elem) }, l)
+#  compatible <- Reduce(function(l,r) l & r, x=m, init=T)
+#  if(!compatible){ stop(paste('rbind: all elements must be of type', klass, 'and in the same H2O instance'))}
 
   # If cbind(x,x), dupe colnames will automatically be renamed by H2O
   if(is.null(names(l)))
